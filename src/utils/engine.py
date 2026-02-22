@@ -10,8 +10,8 @@ def train_step(model, loader, optimizer, device, scaler, epoch):
     
     progress_bar = tqdm(loader, desc=f"Epoch {epoch} [Train]")
     for batch_idx, batch in enumerate(progress_bar):
-        voxel  = batch['voxel'].to(device)    # (B, 5, 72, 128)
-        action = batch['action'].to(device)   # (B, 8, 3) normalized
+        voxel  = batch['voxel'].to(device)   
+        action = batch['action'].to(device)   
         
         # Expand dummy history if necessary (B, C, H, W) -> (B, 5, C, H, W)
         if voxel.dim() == 4:
@@ -38,18 +38,19 @@ def train_step(model, loader, optimizer, device, scaler, epoch):
         scaler.update()
         
         total_loss += loss.item()
-        progress_bar.set_postfix(loss=f"{loss.item():.4f}")
+        # progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     
     return total_loss / n_batches
 
 
 
 @torch.no_grad()
-def eval_step(model, loader, device):
+def eval_step(model, loader, epoch, device):
     model.eval()
     total_loss = 0.0
-    
-    for batch in loader:
+
+    progress_bar = tqdm(loader, desc=f"Epoch {epoch} [Val]")
+    for batch_idx, batch in enumerate(progress_bar):
         voxel  = batch['voxel'].to(device)
         action = batch['action'].to(device)
         

@@ -18,15 +18,18 @@ import numpy as np
 
 def main():
     device     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    total_epochs = 1
+    total_epochs = 100
     batch_size   = 32
     np.random.seed(42)
-    experiment_name = "eGoNavi_test01"
+    experiment_name = "eGoNavi_test04_one_atten_layer_100 epoch"
     max_patience  = 10
+
+    torch.manual_seed(42)
+    torch.cuda.manual_seed(42)
 
     
     encoder_cfg = {"in_channels": 5, "out_dim": 512}
-    vint_cfg = {"token_dim": 512, "num_tokens": 6, "num_layers": 4, "num_heads": 4, "ff_dim": 2048}
+    vint_cfg = {"token_dim": 512, "num_tokens": 6, "num_layers": 1, "num_heads": 4, "ff_dim": 2048}
     diffusion_cfg = {"context_dim": 512, "action_dim": 3, "traj_len": 8, "hidden_dim": 512}
 
     data_dir = Path("../h5_test") 
@@ -74,7 +77,7 @@ def main():
     model  = eGoNavi(encoder_cfg, vint_cfg, diffusion_cfg).to(device)
 
     param_groups = [
-        {'params': model.vision_encoder.parameters(), 'lr': 1e-4},
+        {'params': model.vision_encoder.parameters(), 'lr': 5e-4},
         {'params': model.transformer.parameters(),    'lr': 5e-4},
         {'params': model.action_head.parameters(),    'lr': 5e-4},
     ]
@@ -82,9 +85,10 @@ def main():
     optimizer = torch.optim.AdamW(param_groups, weight_decay=1e-6)
 
     warmup_epochs = 5 # for the cosine scheduler to ramp up to full LR
-    linear_scheduler = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
-    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs, eta_min=1e-6)
-    scheduler = SequentialLR( optimizer, schedulers=[ linear_scheduler, cosine_scheduler], milestones=[warmup_epochs])
+    # linear_scheduler = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
+    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs, eta_min=1e-6)
+    # scheduler = SequentialLR( optimizer, schedulers=[cosine_scheduler], milestones=[warmup_epochs])
+    scheduler = cosine_scheduler
 
     scaler    = GradScaler()
     
@@ -101,7 +105,7 @@ def main():
     for epoch in range(1, total_epochs + 1):
 
         train_loss = train_step(model, train_loader, optimizer, device, scaler, epoch)
-        val_loss = eval_step(model, val_loader, device)
+        val_loss = eval_step(model, val_loader, epoch, device)
         scheduler.step()
         
         print(f"Epoch {epoch}/{total_epochs} | "
@@ -110,12 +114,13 @@ def main():
               f"LR (encoder, transformer, action_head): {optimizer.param_groups[0]['lr']:.2e} {optimizer.param_groups[1]['lr']:.2e} {optimizer.param_groups[2]['lr']:.2e}")
         
 
-        
+        epoch_weight_save = model_path / f'checkpoint_epoch_{epoch}.pth'
+        print(epoch_weight_save)
         torch.save({
                 'epoch':      epoch,
                 'model':      model.state_dict(),
                 'val_loss':   val_loss,
-            }, model_path / f'/checkpoint_epoch_{epoch}.pth')
+            }, epoch_weight_save )
         
         print(f" Saved {epoch} model (val_loss={val_loss:.4f})")
 
