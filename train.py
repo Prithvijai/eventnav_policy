@@ -21,6 +21,9 @@ def main():
     total_epochs = 100
     batch_size   = 32
     np.random.seed(42)
+    torch.manual_seed(42)
+    torch.cuda.manual_seed(42)
+
     experiment_name = "eGoNavi_test04_one_atten_layer_100 epoch"
     max_patience  = 10
 
