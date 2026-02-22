@@ -21,6 +21,8 @@ def main():
     total_epochs = 1
     batch_size   = 32
     np.random.seed(42)
+    experiment_name = "eGoNavi_test01"
+    max_patience  = 10
 
     
     encoder_cfg = {"in_channels": 5, "out_dim": 512}
@@ -92,7 +94,9 @@ def main():
 
     best_val_loss = float('inf')
     patience      = 0
-    max_patience  = 15
+
+    model_path = Path(f"./model/{experiment_name}")
+    model_path.mkdir(parents=True, exist_ok=True)
     
     for epoch in range(1, total_epochs + 1):
 
@@ -105,23 +109,27 @@ def main():
               f"Val loss: {val_loss:.4f} | "
               f"LR (encoder, transformer, action_head): {optimizer.param_groups[0]['lr']:.2e} {optimizer.param_groups[1]['lr']:.2e} {optimizer.param_groups[2]['lr']:.2e}")
         
-        # Save best model
+
+        
+        torch.save({
+                'epoch':      epoch,
+                'model':      model.state_dict(),
+                'val_loss':   val_loss,
+            }, model_path / f'/checkpoint_epoch_{epoch}.pth')
+        
+        print(f" Saved {epoch} model (val_loss={val_loss:.4f})")
+
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience      = 0
-            torch.save({
-                'epoch':      epoch,
-                'model':      model.state_dict(),
-                'optimizer':  optimizer.state_dict(),
-                'scheduler':  scheduler.state_dict(),
-                'val_loss':   val_loss,
-            }, 'best_model.pth')
-            print(f"  ✓ Saved best model (val_loss={val_loss:.4f})")
         else:
+            # Early stopping patience
             patience += 1
             if patience >= max_patience:
                 print(f"Early stopping at epoch {epoch}")
                 break
+
+
 
 if __name__ == '__main__':
     main()
