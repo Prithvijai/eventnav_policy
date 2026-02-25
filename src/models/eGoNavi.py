@@ -36,12 +36,12 @@ class eGoNavi(nn.Module):
         return context
 
     @torch.no_grad()
-    def sample(self, obs_voxels, goal_voxel):
+    def sample(self, obs_voxels, goal_voxel, device):
         """
         Sample actions given observations.
         """
         context = self.encode(obs_voxels, goal_voxel)
-        return self.action_head.sample(context)
+        return self.action_head.sample(context, device)
 
     def forward(self, obs_voxels, goal_voxel, noisy_action, timestep):
         """

@@ -90,7 +90,7 @@ def evaluate():
     # Model Configurations
     encoder_cfg = {"in_channels": 5, "out_dim": 512}
     vint_cfg = {"token_dim": 512, "num_tokens": 6, "num_layers": 1, "num_heads": 4, "ff_dim": 2048}
-    diffusion_cfg = {"context_dim": 512, "action_dim": 3, "traj_len": 8, "hidden_dim": 512}
+    diffusion_cfg = {"context_dim": 512, "action_dim": 3, "traj_len": 8, "hidden_dim": 256}
 
     model = eGoNavi(encoder_cfg, vint_cfg, diffusion_cfg).to(device)
     
@@ -132,7 +132,7 @@ def evaluate():
                 goal_voxel = voxel[:, -1]
                 
                 # Sample 8-step chunk
-                pred_action_norm = model.sample(voxel, goal_voxel) # (1, 8, 3)
+                pred_action_norm = model.sample(voxel, goal_voxel, device) # (1, 8, 3)
                 
                 # Unnormalize
                 gt_unnorm = (gt_action_norm * action_std + action_mean).cpu().numpy()[0]
@@ -156,7 +156,7 @@ def evaluate():
                 if voxel.dim() == 4:
                     voxel = voxel.unsqueeze(1).repeat(1, 5, 1, 1, 1)
                 goal_voxel = voxel[:, -1]
-                pred_action_norm = model.sample(voxel, goal_voxel)
+                pred_action_norm = model.sample(voxel, goal_voxel, device)
                 gt_action = (gt_action_norm * action_std + action_mean).cpu().numpy()[0]
                 pred_action = (pred_action_norm * action_std + action_mean).cpu().numpy()[0]
                 

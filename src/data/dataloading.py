@@ -35,8 +35,8 @@ class EnavippH5Dataset(Dataset):
             if stats is None:
                 all_actions = f['actions'][()] # (N, 8, 3)
                 # Compute mean and std across all samples and trajectory steps
-                self.action_mean = torch.from_numpy(all_actions.mean(axis=(0, 1)).astype(np.float32))
-                self.action_std = torch.from_numpy(all_actions.std(axis=(0, 1)).astype(np.float32))
+                self.action_mean = torch.from_numpy(all_actions.mean(axis=0).astype(np.float32))
+                self.action_std = torch.from_numpy(all_actions.std(axis=0).astype(np.float32))
                 # Avoid division by zero
                 self.action_std = torch.clamp(self.action_std, min=1e-6)
             else:
