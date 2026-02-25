@@ -33,12 +33,9 @@ def run_profiler(model, loader, optimizer, device, output_dir='./profiler_logs')
             except StopIteration:
                 break
                 
-            voxel  = batch['voxel'].to(device)
-            action = batch['action'].to(device)
-            
-            if voxel.dim() == 4:
-                voxel = voxel.unsqueeze(1).repeat(1, 5, 1, 1, 1)
-            goal_voxel = voxel[:, -1]
+            voxel  = batch["voxel"].to(device)
+            goal_voxel = batch["goal_voxel"].to(device)
+            action = batch["action"].to(device)
 
             optimizer.zero_grad()
             

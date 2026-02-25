@@ -10,15 +10,9 @@ def train_step(model, loader, optimizer, device, scaler, epoch):
     
     progress_bar = tqdm(loader, desc=f"Epoch {epoch} [Train]")
     for batch_idx, batch in enumerate(progress_bar):
-        voxel  = batch['voxel'].to(device)   
-        action = batch['action'].to(device)   
-        
-        # Expand dummy history if necessary (B, C, H, W) -> (B, 5, C, H, W)
-        if voxel.dim() == 4:
-            voxel = voxel.unsqueeze(1).repeat(1, 5, 1, 1, 1)
-        
-        # Using latest frame as dummy goal
-        goal_voxel = voxel[:, -1]
+        voxel       = batch["voxel"].to(device)       # (B, 5, C, H, W)
+        goal_voxel  = batch["goal_voxel"].to(device)  # (B, C, H, W)
+        action      = batch["action"].to(device)      # (B, 8, 3)
         
         optimizer.zero_grad()
         

@@ -68,29 +68,37 @@ class EnavippH5Dataset(Dataset):
         }
 
     def __getitem__(self, idx):
-        f = self.h5f # Triggers lazy opening
+        f = self.h5f
         
-        voxel = torch.from_numpy(f['voxels'][idx].astype(np.float32))
+        # 1. Load History (5 frames)
+        history_indices = [max(0, idx - i) for i in range(4, -1, -1)]
+        history_voxels = []
+        for h_idx in history_indices:
+            history_voxels.append(torch.from_numpy(f["voxels"][h_idx].astype(np.float32)))
+        voxels = torch.stack(history_voxels, dim=0) # (5, C, H, W)
         
-        # Load and normalize action
-        raw_action = torch.from_numpy(f['actions'][idx].astype(np.float32))
+        # 2. Load Goal (The last frame of this dataset)
+        goal_voxel = torch.from_numpy(f["voxels"][-1].astype(np.float32))
+        
+        # 3. Load and normalize action
+        raw_action = torch.from_numpy(f["actions"][idx].astype(np.float32))
         action = (raw_action - self.action_mean) / self.action_std
         
         sample = {
-            'voxel': voxel,
-            'action': action,
-            'timestamp_ns': f['timestamps_ns'][idx]
+            "voxel": voxels,
+            "goal_voxel": goal_voxel,
+            "action": action,
+            "timestamp_ns": f["timestamps_ns"][idx]
         }
         
-        # Load optional RGB using mask and indices if enabled
         if self.load_rgb and self.has_rgb_data:
-            if f['rgb_mask'][idx]:
-                img_idx = f['rgb_indices'][idx]
-                rgb = torch.from_numpy(f['rgb_images'][img_idx].astype(np.float32)).permute(2, 0, 1) / 255.0
-                sample['rgb'] = rgb
+            if f["rgb_mask"][idx]:
+                img_idx = f["rgb_indices"][idx]
+                rgb = torch.from_numpy(f["rgb_images"][img_idx].astype(np.float32)).permute(2, 0, 1) / 255.0
+                sample["rgb"] = rgb
             else:
-                _, h, w = voxel.shape[-2:] 
-                sample['rgb'] = torch.zeros((3, h, w), dtype=torch.float32)
+                _, h, w = voxels.shape[-2:] 
+                sample["rgb"] = torch.zeros((3, h, w), dtype=torch.float32)
                 
         return sample
 

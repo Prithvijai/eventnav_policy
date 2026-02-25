@@ -122,26 +122,29 @@ def evaluate():
         gt_list = []
         pred_list = []
         
+        history = []
         with torch.no_grad():
             for batch in tqdm(loader):
-                voxel = batch['voxel'].to(device)
-                gt_action_norm = batch['action'].to(device) # (1, 8, 3)
+                voxel = batch["voxel"].to(device) # (1, 5, H, W)
+                gt_action_norm = batch["action"].to(device) # (1, 8, 3)
                 
-                if voxel.dim() == 4:
-                    voxel = voxel.unsqueeze(1).repeat(1, 5, 1, 1, 1)
-                goal_voxel = voxel[:, -1]
+                history.append(voxel)
+                if len(history) > 5:
+                    history.pop(0)
                 
-                # Sample 8-step chunk
-                pred_action_norm = model.sample(voxel, goal_voxel, device) # (1, 8, 3)
+                if len(history) < 5:
+                    continue
                 
-                # Unnormalize
+                input_voxels = torch.stack(history, dim=1)
+                goal_voxel = voxel
+                
+                pred_action_norm = model.sample(input_voxels, goal_voxel, device) # (1, 8, 3)
+                
                 gt_unnorm = (gt_action_norm * action_std + action_mean).cpu().numpy()[0]
                 pred_unnorm = (pred_action_norm * action_std + action_mean).cpu().numpy()[0]
                 
-                # Take only the first action (t0) as requested
                 gt_list.append(gt_unnorm[0])
                 pred_list.append(pred_unnorm[0])
-        
         plot_full_trajectory(np.array(gt_list), np.array(pred_list), h5_files[0].name)
         
     else:
