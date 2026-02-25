@@ -7,7 +7,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from src.data.dataloading import EnavippH5Dataset
 from src.models.eGoNavi import eGoNavi
 from src.data.preprocessing import collate_enavi
-from src.utils.helper import compute_ddpm_loss, run_profiler
+from src.utils.helper import run_profiler
 
 from src.utils.engine import train_step, eval_step
 from pathlib import Path
@@ -18,7 +18,7 @@ import numpy as np
 
 def main():
     device     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    total_epochs = 100
+    total_epochs = 1
     batch_size   = 32
     np.random.seed(42)
     torch.manual_seed(42)
@@ -33,7 +33,7 @@ def main():
     
     encoder_cfg = {"in_channels": 5, "out_dim": 512}
     vint_cfg = {"token_dim": 512, "num_tokens": 6, "num_layers": 1, "num_heads": 4, "ff_dim": 2048}
-    diffusion_cfg = {"context_dim": 512, "action_dim": 3, "traj_len": 8, "hidden_dim": 512}
+    diffusion_cfg = {"context_dim": 512, "action_dim": 3, "traj_len": 8, "hidden_dim": 256}
 
     data_dir = Path("../h5_test") 
 

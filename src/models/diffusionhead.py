@@ -1,95 +1,103 @@
 import torch
 import torch.nn as nn
 import math
+from .diffusionpolicy import ConditionalUnet1D, SinusoidalPosEmb
+import torch.nn.functional as F
 
-class SinusoidalPosEmb(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
+    
+def squared_noise_sheduler(t, s=0.008):
+    level = torch.Tensor(range(t+1))
+    
+    alpha_noise = torch.cos( (((level/ t) + s) / (1 + s)) * (torch.pi/2)) ** 2
+    alpha_noise_norm = alpha_noise / alpha_noise[0]
+    return alpha_noise_norm
 
-    def forward(self, x):
-        device = x.device
-        half_dim = self.dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
-        emb = x[:, None] * emb[None, :]
-        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
-        return emb
+def compute_ddpm_loss(model, features, gt_actions):
+    """
+    features:   (B, 512) transformer output
+    gt_actions: (B, 8, 3) normalized ground truth actions
+    """
+    B = gt_actions.shape[0]
+    device = gt_actions.device
+
+    t = torch.randint(
+        0,
+        model.action_head.step,
+        (B,),
+        device=device
+    ).long()
+
+    noisy_actions, noise = model.action_head.add_noise(gt_actions, t)
+
+    pred_noise = model.action_head(noisy_actions, t, features)
+    loss = F.mse_loss(pred_noise, noise)
+
+    return loss
 
 class DiffusionPolicyAction(nn.Module):
-    """
-    DDPM Action Head for Diffusion Policy.
-    Predicts the noise added to a sequence of actions.
-    """
-    def __init__(self, context_dim=512, action_dim=3, traj_len=8, hidden_dim=512, T=100):
+    def __init__ (self, context_dim=512, action_dim=3, traj_len=8, step=10, hidden_dim=256):
         super().__init__()
 
-        self.traj_len = traj_len
-        self.action_dim = action_dim
-        self.T = T # Number of diffusion steps
-        
-        # Precompute DDPM schedule for noise addition
-        betas = torch.linspace(1e-4, 0.02, T)
-        alphas = 1.0 - betas
-        alphas_cumprod = torch.cumprod(alphas, axis=0)
-        self.register_buffer('alphas_cumprod', alphas_cumprod)
+        self.register_buffer('alpha_noise_norm', squared_noise_sheduler(step))
 
-        # Timestep Embedding
-        self.time_mlp = nn.Sequential(
-            SinusoidalPosEmb(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim * 2),
-            nn.Mish(),
-            nn.Linear(hidden_dim * 2, hidden_dim),
-        )
+        self.step = step
 
-        # Main MLP
-        input_dim = (traj_len * action_dim) + context_dim + hidden_dim
-        
-        self.mid_mlp = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.Mish(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Mish(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Mish(),
-            nn.Linear(hidden_dim, traj_len * action_dim)
-        )
+        self.proj_context = nn.Linear(context_dim, hidden_dim)
 
-    def add_noise(self, x_0, noise, t):
-        """Add noise according to the DDPM forward process."""
-        # x_0: (B, 24) or (B, 8, 3)
-        # noise: (B, 24) or (B, 8, 3)
-        # t: (B,)
+        self.unet_block = ConditionalUnet1D(input_dim=action_dim,
+                global_cond_dim=hidden_dim,
+                down_dims= [64, 128, 256],
+                cond_predict_scale=False)
         
-        # Ensure correct shapes for broadcasting
-        sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod[t]).view(-1, 1, 1)
-        if x_0.dim() == 2: # flattened
-             sqrt_alphas_cumprod = sqrt_alphas_cumprod.view(-1, 1)
-        
-        sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod[t]).view(-1, 1, 1)
-        if x_0.dim() == 2: # flattened
-             sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod.view(-1, 1)
+    def add_noise(self, action, t):
+        alpha_t = self.alpha_noise_norm[t]
+        sqrt_alpha_t = torch.sqrt(alpha_t).view(-1, 1, 1)
+        sqrt_one_miuns_alpha_t = torch.sqrt(1 - alpha_t).view(-1, 1, 1)
 
-        return sqrt_alphas_cumprod * x_0 + sqrt_one_minus_alphas_cumprod * noise
+        # print(sqrt_alpha_t, sqrt_one_miuns_alpha_t, action)
+        noise = torch.randn_like(action)
+        noise_action = sqrt_alpha_t * action + sqrt_one_miuns_alpha_t * noise
 
-    def forward(self, noisy_action, timestep, context):
-        """
-        noisy_action: (B, traj_len, action_dim)
-        timestep: (B,) 
-        context: (B, context_dim)
-        Returns: predicted noise (B, traj_len, action_dim)
-        """
-        B = noisy_action.shape[0]
+        return noise_action, noise
+    
+    def forward(self, action, timestep, context):
+        return self.unet_block(action, timestep, global_cond=self.proj_context(context))
+    
+
+    @torch.no_grad()
+    def sample(self, context, device):
+        s = 1e-10
+        B = context.shape[0] 
+        action = torch.randn(B, 8, 3).to(device)
+
+        for t in reversed(range(self.step)):
+            t_batch = torch.full((B,), t, device=device, dtype=torch.long)
+            pred_noise = self.forward(action, t_batch, context)
+
+            alpha_t = self.alpha_noise_norm[t].to(device)
+            alpha_t1  = self.alpha_noise_norm[t - 1].to(device) if t > 0 else torch.tensor(1.0, device=device)
+            
+            sqrt_alpha_t = torch.sqrt(alpha_t).view(-1, 1, 1)
+            sqrt_one_miuns_alpha_t = torch.sqrt(1 - alpha_t + s).view(-1, 1, 1)
+
+            sqrt_alpha_t1 = torch.sqrt(alpha_t1).view(-1, 1, 1)
+            curr_alpha_t = alpha_t / alpha_t1
+            beta_t = 1 - curr_alpha_t
+
+            pred_action = (action - sqrt_one_miuns_alpha_t * pred_noise) / sqrt_alpha_t
+            pred_action = pred_action.clamp(-1, 1)
+
+            mu_t1 = (sqrt_alpha_t1 * beta_t * pred_action) / (1 - alpha_t + s) + (torch.sqrt(curr_alpha_t) * (1 - alpha_t1 + s) * action) / (1 - alpha_t + s)
+
+            if t > 0:
+                noise = torch.randn_like(action)
+                sigma = torch.sqrt((1 - alpha_t1 + s) / (1 - alpha_t + s) * beta_t)
+                action = mu_t1 + sigma * noise
+            else:
+                action = mu_t1
+
+        return action
+
+
+     
         
-        # Flatten noisy action
-        a_flat = noisy_action.reshape(B, -1)
-        
-        # Get time embedding
-        t_emb = self.time_mlp(timestep)
-        
-        # Concatenate everything
-        x = torch.cat([a_flat, context, t_emb], dim=1)
-        
-        # Predict noise
-        out = self.mid_mlp(x)
-        return out.reshape(B, self.traj_len, self.action_dim)

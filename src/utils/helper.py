@@ -1,7 +1,6 @@
 import torch
 from torch.profiler import profile, record_function, ProfilerActivity, tensorboard_trace_handler
-import torch.nn.functional as F
-
+from src.models.diffusionhead import compute_ddpm_loss
 
 def run_profiler(model, loader, optimizer, device, output_dir='./profiler_logs'):
     """
@@ -64,41 +63,4 @@ def run_profiler(model, loader, optimizer, device, output_dir='./profiler_logs')
     ))
 
 
-def compute_ddpm_loss(model, features, gt_actions):
-    """
-    model:      full eGoNavi model
-    features:   (B, 512) transformer output
-    gt_actions: (B, 8, 3) normalized ground truth actions
-    
-    Returns: scalar loss
-    """
-    B = gt_actions.shape[0]
-    device = gt_actions.device
-    
-    # Flatten actions: (B, 8, 3) → (B, 24)
-    gt_flat = gt_actions.reshape(B, -1)
-    
-    # Sample random diffusion timesteps for each sample in batch
-    t = torch.randint(
-        0,
-        model.action_head.T,
-        (B,),
-        device=device
-    )
-    
-    # Sample gaussian noise — same shape as flattened actions
-    noise = torch.randn_like(gt_flat)
-    
-    # Forward diffusion: add noise to clean actions
-    noisy_actions_flat = model.action_head.add_noise(gt_flat, noise, t)
-    
-    # Reshape for action head: (B, 24) -> (B, 8, 3)
-    noisy_actions = noisy_actions_flat.reshape(B, model.action_head.traj_len, model.action_head.action_dim)
-    
-    # Predict the noise that was added
-    pred_noise = model.action_head(noisy_actions, t, features)
-    
-    # Loss: how well did we predict the noise
-    loss = F.mse_loss(pred_noise.reshape(B, -1), noise)
-    
-    return loss
+

@@ -1,7 +1,7 @@
 import torch
 from torch.amp import GradScaler, autocast
 from tqdm import tqdm
-from .helper import compute_ddpm_loss
+from src.models.diffusionhead import compute_ddpm_loss
 
 def train_step(model, loader, optimizer, device, scaler, epoch):
     model.train()
