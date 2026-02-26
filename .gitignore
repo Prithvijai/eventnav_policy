@@ -1,2 +1,7 @@
 /profiler_logs/
 *.pth
+
+__pycache__/
+*.pyc
+.vscode/
+

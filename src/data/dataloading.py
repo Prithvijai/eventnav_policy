@@ -1,3 +1,4 @@
+import torch.nn.functional as F
 import h5py
 import torch
 import numpy as np
@@ -33,15 +34,15 @@ class EnavippH5Dataset(Dataset):
 
             # Calculate or use provided action normalization stats
             if stats is None:
-                all_actions = f['actions'][()] # (N, 8, 3)
-                # Compute mean and std across all samples and trajectory steps
-                self.action_mean = torch.from_numpy(all_actions.mean(axis=0).astype(np.float32))
-                self.action_std = torch.from_numpy(all_actions.std(axis=0).astype(np.float32))
-                # Avoid division by zero
-                self.action_std = torch.clamp(self.action_std, min=1e-6)
+                all_actions = f['actions'][()] 
+                
+                self.action_mean_xy = torch.from_numpy(all_actions[:, :,0:2].mean(axis=(0, 1)).astype(np.float32))
+                self.action_std_xy = torch.from_numpy(all_actions[:, :,0:2].std(axis=(0, 1)).astype(np.float32))
+
+                self.action_std_xy = torch.clamp(self.action_std_xy, min=1e-6)
             else:
-                self.action_mean = stats['action_mean']
-                self.action_std = stats['action_std']
+                self.action_mean_xy = stats['action_mean_xy']
+                self.action_std_xy = stats['action_std_xy']
 
     @property
     def h5f(self):
@@ -63,42 +64,52 @@ class EnavippH5Dataset(Dataset):
 
     def get_stats(self):
         return {
-            'action_mean': self.action_mean,
-            'action_std': self.action_std
+            'action_mean_xy': self.action_mean_xy,
+            'action_std_xy': self.action_std_xy
         }
 
     def __getitem__(self, idx):
         f = self.h5f
+        VOXEL_SIZE = (72, 128)  # Target size
         
-        # 1. Load History (5 frames)
+        # 1. Load and Resize History (5 frames)
         history_indices = [max(0, idx - i) for i in range(4, -1, -1)]
         history_voxels = []
         for h_idx in history_indices:
-            history_voxels.append(torch.from_numpy(f["voxels"][h_idx].astype(np.float32)))
-        voxels = torch.stack(history_voxels, dim=0) # (5, C, H, W)
+            v = torch.from_numpy(f['voxels'][h_idx].astype(np.float32)).unsqueeze(0) # (1, C, H, W)
+            # Resize immediately to low-res to save RAM
+            v = F.interpolate(v, size=VOXEL_SIZE, mode='area').squeeze(0)
+            history_voxels.append(v)
+        voxels = torch.stack(history_voxels, dim=0) # (5, C, 72, 128)
         
-        # 2. Load Goal (The last frame of this dataset)
-        goal_voxel = torch.from_numpy(f["voxels"][-1].astype(np.float32))
+        # 2. Load and Resize Goal
+        goal_voxel = torch.from_numpy(f['voxels'][-1].astype(np.float32)).unsqueeze(0)
+        goal_voxel = F.interpolate(goal_voxel, size=VOXEL_SIZE, mode='area').squeeze(0)
         
         # 3. Load and normalize action
-        raw_action = torch.from_numpy(f["actions"][idx].astype(np.float32))
-        action = (raw_action - self.action_mean) / self.action_std
+        raw_action = torch.from_numpy(f['actions'][idx].astype(np.float32))
+        raw_action_xy = raw_action[:,0:2]
+        raw_action_theta = raw_action[:,2:3]
+        action_xy = (raw_action_xy - self.action_mean_xy) / self.action_std_xy
+        action_theta = raw_action_theta / torch.pi
+        action = torch.concat([action_xy, action_theta], dim=-1)
+
         
         sample = {
-            "voxel": voxels,
-            "goal_voxel": goal_voxel,
-            "action": action,
-            "timestamp_ns": f["timestamps_ns"][idx]
+            'voxel': voxels,
+            'goal_voxel': goal_voxel,
+            'action': action,
+            'timestamp_ns': f['timestamps_ns'][idx]
         }
         
         if self.load_rgb and self.has_rgb_data:
-            if f["rgb_mask"][idx]:
-                img_idx = f["rgb_indices"][idx]
-                rgb = torch.from_numpy(f["rgb_images"][img_idx].astype(np.float32)).permute(2, 0, 1) / 255.0
-                sample["rgb"] = rgb
+            if f['rgb_mask'][idx]:
+                img_idx = f['rgb_indices'][idx]
+                rgb = torch.from_numpy(f['rgb_images'][img_idx].astype(np.float32)).permute(2, 0, 1) / 255.0
+                sample['rgb'] = rgb
             else:
                 _, h, w = voxels.shape[-2:] 
-                sample["rgb"] = torch.zeros((3, h, w), dtype=torch.float32)
+                sample['rgb'] = torch.zeros((3, h, w), dtype=torch.float32)
                 
         return sample
 

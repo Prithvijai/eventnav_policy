@@ -17,8 +17,9 @@ fig, ax = plt.subplots(1, 2)
 # ax[0].imshow(ds[10]["rgb_images"].permute(1, 2, 0).cpu().numpy())
 # ax[0].set_title("RGB Left Image")
 # ax[0].axis('off')
+print(ds[10]["voxel"][0].shape)
 
-ax[1].imshow(ds[10]["voxel"].sum(dim=0).cpu().numpy(), cmap='gray')
+ax[1].imshow(ds[20]["voxel"][0].sum(dim=0).cpu().numpy(), cmap='gray')
 ax[1].set_title("Event Voxel (Summed)")
 ax[1].axis('off')
 

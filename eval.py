@@ -122,31 +122,30 @@ def evaluate():
         gt_list = []
         pred_list = []
         
-        history = []
+        step_count = 0
         with torch.no_grad():
             for batch in tqdm(loader):
-                voxel = batch["voxel"].to(device) # (1, 5, H, W)
-                gt_action_norm = batch["action"].to(device) # (1, 8, 3)
-                
-                history.append(voxel)
-                if len(history) > 5:
-                    history.pop(0)
-                
-                if len(history) < 5:
-                    continue
-                
-                input_voxels = torch.stack(history, dim=1)
-                goal_voxel = voxel
-                
-                pred_action_norm = model.sample(input_voxels, goal_voxel, device) # (1, 8, 3)
-                
+                step_count += 1
+                if step_count < 5:
+                    continue # Skip first 5 steps as requested
+
+                voxels = batch["voxel"].to(device)      # Already (1, 5, 5, 72, 128)
+                goal_voxel = batch["goal_voxel"].to(device) # (1, 5, 72, 128)
+                gt_action_norm = batch["action"].to(device)
+
+                # Sample 8-step chunk
+                pred_action_norm = model.sample(voxels, goal_voxel, device)
+
+                # Unnormalize and store
                 gt_unnorm = (gt_action_norm * action_std + action_mean).cpu().numpy()[0]
                 pred_unnorm = (pred_action_norm * action_std + action_mean).cpu().numpy()[0]
-                
+
                 gt_list.append(gt_unnorm[0])
                 pred_list.append(pred_unnorm[0])
-        plot_full_trajectory(np.array(gt_list), np.array(pred_list), h5_files[0].name)
         
+
+        # Visualize the resulting integrated trajectory
+        plot_full_trajectory(np.array(gt_list), np.array(pred_list), h5_files[0].name)
     else:
         # Random sample visualization
         loader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=collate_enavi)
