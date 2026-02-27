@@ -65,7 +65,9 @@ class EnavippH5Dataset(Dataset):
     def get_stats(self):
         return {
             'action_mean_xy': self.action_mean_xy,
-            'action_std_xy': self.action_std_xy
+            'action_std_xy': self.action_std_xy,
+            'action_mean_theta': self.action_mean_theta,
+            'action_std_theta': self.action_std_theta
         }
 
     def __getitem__(self, idx):
@@ -82,16 +84,27 @@ class EnavippH5Dataset(Dataset):
             history_voxels.append(v)
         voxels = torch.stack(history_voxels, dim=0) # (5, C, 72, 128)
         
-        # 2. Load and Resize Goal
-        goal_voxel = torch.from_numpy(f['voxels'][-1].astype(np.float32)).unsqueeze(0)
+        # 2. Load and Resize Goal (BUG 2 FIX)
+        # Instead of always taking the last frame, take a frame 1-20 steps ahead (subgoal)
+        max_goal_dist = min(20, self.length - 1 - idx)
+        if max_goal_dist > 0:
+            goal_dist = np.random.randint(1, max_goal_dist + 1)
+        else:
+            goal_dist = 0
+        goal_idx = min(idx + goal_dist, self.length - 1)
+        
+        goal_voxel = torch.from_numpy(f['voxels'][goal_idx].astype(np.float32)).unsqueeze(0)
         goal_voxel = F.interpolate(goal_voxel, size=VOXEL_SIZE, mode='area').squeeze(0)
         
         # 3. Load and normalize action
         raw_action = torch.from_numpy(f['actions'][idx].astype(np.float32))
         raw_action_xy = raw_action[:,0:2]
         raw_action_theta = raw_action[:,2:3]
+        
         action_xy = (raw_action_xy - self.action_mean_xy) / self.action_std_xy
-        action_theta = raw_action_theta / torch.pi
+        # BUG 5 Fix: Use Z-score for theta too
+        action_theta = (raw_action_theta - self.action_mean_theta) / self.action_std_theta
+        
         action = torch.concat([action_xy, action_theta], dim=-1)
 
         

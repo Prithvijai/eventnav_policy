@@ -1,3 +1,4 @@
+import h5py
 import torch 
 from torch.utils.data import ConcatDataset, DataLoader, Subset
 from torch.amp import GradScaler
@@ -18,13 +19,13 @@ import numpy as np
 
 def main():
     device     = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    total_epochs = 1
+    total_epochs = 500
     batch_size   = 32
     np.random.seed(42)
     torch.manual_seed(42)
     torch.cuda.manual_seed(42)
 
-    experiment_name = "eGoNavi_test04_one_atten_layer_100 epoch"
+    experiment_name = "eGoNavi_test05_4_layers_global_norm_subgoal"
     max_patience  = 10
 
     torch.manual_seed(42)
@@ -32,7 +33,7 @@ def main():
 
     
     encoder_cfg = {"in_channels": 5, "out_dim": 512}
-    vint_cfg = {"token_dim": 512, "num_tokens": 6, "num_layers": 1, "num_heads": 4, "ff_dim": 2048}
+    vint_cfg = {"token_dim": 512, "num_tokens": 6, "num_layers": 4, "num_heads": 4, "ff_dim": 2048}
     diffusion_cfg = {"context_dim": 512, "action_dim": 3, "traj_len": 8, "hidden_dim": 256}
 
     data_dir = Path("../h5_test") 
@@ -40,10 +41,34 @@ def main():
     h5_files = sorted(list(data_dir.glob("*.h5")))
     print(f"Loading {len(h5_files)} trajectories...")
 
+    print(f"Calculating global action statistics across {len(h5_files)} files...")
+    all_actions_list = []
+    for f_path in h5_files:
+        with h5py.File(f_path, 'r') as f:
+            all_actions_list.append(f['actions'][()])
+    
+    all_actions_concat = np.concatenate(all_actions_list, axis=0)
+    global_mean_xy = torch.from_numpy(all_actions_concat[:, :, 0:2].mean(axis=(0, 1)).astype(np.float32))
+    global_std_xy  = torch.from_numpy(all_actions_concat[:, :, 0:2].std(axis=(0, 1)).astype(np.float32))
+    global_std_xy  = torch.clamp(global_std_xy, min=1e-6)
+
+    global_mean_theta = torch.from_numpy(all_actions_concat[:, :, 2:3].mean(axis=(0, 1)).astype(np.float32))
+    global_std_theta  = torch.from_numpy(all_actions_concat[:, :, 2:3].std(axis=(0, 1)).astype(np.float32))
+    global_std_theta  = torch.clamp(global_std_theta, min=1e-6)
+
+    global_stats = {
+        'action_mean_xy': global_mean_xy,
+        'action_std_xy': global_std_xy,
+        'action_mean_theta': global_mean_theta,
+        'action_std_theta': global_std_theta
+    }
+    print(f"Global XY Mean: {global_mean_xy}, Std: {global_std_xy}")
+    print(f"Global Theta Mean: {global_mean_theta}, Std: {global_std_theta}")
+
     datasets = []
     for f in h5_files:
         if f.exists():
-            datasets.append(EnavippH5Dataset(f, load_rgb=False))      
+            datasets.append(EnavippH5Dataset(f, load_rgb=False, stats=global_stats))      
 
     if not datasets:
         raise FileNotFoundError("No valid datasets were loaded.")
@@ -87,11 +112,10 @@ def main():
 
     optimizer = torch.optim.AdamW(param_groups, weight_decay=1e-6)
 
-    warmup_epochs = 5 # for the cosine scheduler to ramp up to full LR
-    # linear_scheduler = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
-    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs, eta_min=1e-6)
-    # scheduler = SequentialLR( optimizer, schedulers=[cosine_scheduler], milestones=[warmup_epochs])
-    scheduler = cosine_scheduler
+    warmup_epochs = 5
+    linear_scheduler = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs)
+    cosine_scheduler = CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs, eta_min=1e-6)
+    scheduler = SequentialLR(optimizer, schedulers=[linear_scheduler, cosine_scheduler], milestones=[warmup_epochs])
 
     scaler    = GradScaler()
     

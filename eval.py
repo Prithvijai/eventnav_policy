@@ -27,14 +27,14 @@ def compute_trajectory(actions):
         traj[i+1] = [x, y, theta]
     return traj
 
-def denormalize_action(action_norm, action_mean_xy, action_std_xy):
+def denormalize_action(action_norm, stats):
     """
-    Denormalizes action: [dx, dy] using mean/std, [dtheta] using pi.
+    Denormalizes action: [dx, dy, dtheta] using Z-score stats.
     """
     # 1. Denormalize XY (first 2 columns)
-    xy_denorm = action_norm[..., :2] * action_std_xy + action_mean_xy
-    # 2. Denormalize Theta (last column) using pi
-    theta_denorm = action_norm[..., 2:3] * torch.pi
+    xy_denorm = action_norm[..., :2] * stats["action_std_xy"] + stats["action_mean_xy"]
+    # 2. Denormalize Theta (last column) using Z-score
+    theta_denorm = action_norm[..., 2:3] * stats["action_std_theta"] + stats["action_mean_theta"]
     return torch.cat([xy_denorm, theta_denorm], dim=-1)
 
 def plot_full_trajectory(gt_actions, pred_actions, file_name, save_path=None):
@@ -129,9 +129,7 @@ def evaluate():
 
     h5_files = sorted(list(Path(args.data_dir).glob("*.h5")))
     dataset = EnavippH5Dataset(h5_files[0], load_rgb=False)
-    stats = dataset.get_stats()
-    action_mean_xy = stats['action_mean_xy'].to(device)
-    action_std_xy = stats['action_std_xy'].to(device)
+    stats = {k: v.to(device) for k, v in dataset.get_stats().items()}
 
     if args.full_traj:
         loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_enavi)
@@ -144,8 +142,8 @@ def evaluate():
                 
                 pred_action_norm = model.sample(voxels, goal_voxel, device)
 
-                gt_unnorm = denormalize_action(batch["action"].to(device), action_mean_xy, action_std_xy).cpu().numpy()[0]
-                pred_unnorm = denormalize_action(pred_action_norm, action_mean_xy, action_std_xy).cpu().numpy()[0]
+                gt_unnorm = denormalize_action(batch["action"].to(device), stats).cpu().numpy()[0]
+                pred_unnorm = denormalize_action(pred_action_norm, stats).cpu().numpy()[0]
 
                 gt_list.append(gt_unnorm[0])
                 pred_list.append(pred_unnorm[0])
@@ -161,8 +159,8 @@ def evaluate():
                 
                 pred_action_norm = model.sample(voxels, goal_voxel, device)
                 
-                gt_action = denormalize_action(batch['action'].to(device), action_mean_xy, action_std_xy).cpu().numpy()[0]
-                pred_action = denormalize_action(pred_action_norm, action_mean_xy, action_std_xy).cpu().numpy()[0]
+                gt_action = denormalize_action(batch['action'].to(device), stats).cpu().numpy()[0]
+                pred_action = denormalize_action(pred_action_norm, stats).cpu().numpy()[0]
                 
                 plot_actions(gt_action, pred_action, i)
 
