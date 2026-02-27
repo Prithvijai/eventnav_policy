@@ -20,33 +20,37 @@ def compute_trajectory(actions):
     x, y, theta = 0.0, 0.0, 0.0
     for i in range(actions.shape[0]):
         dx, dy, dtheta = actions[i]
-        # Body frame to world frame (assuming standard X-forward, Y-left)
+        # Body frame to world frame
         x += dx * np.cos(theta) - dy * np.sin(theta)
         y += dx * np.sin(theta) + dy * np.cos(theta)
         theta += dtheta
         traj[i+1] = [x, y, theta]
     return traj
 
+def denormalize_action(action_norm, action_mean_xy, action_std_xy):
+    """
+    Denormalizes action: [dx, dy] using mean/std, [dtheta] using pi.
+    """
+    # 1. Denormalize XY (first 2 columns)
+    xy_denorm = action_norm[..., :2] * action_std_xy + action_mean_xy
+    # 2. Denormalize Theta (last column) using pi
+    theta_denorm = action_norm[..., 2:3] * torch.pi
+    return torch.cat([xy_denorm, theta_denorm], dim=-1)
+
 def plot_full_trajectory(gt_actions, pred_actions, file_name, save_path=None):
     """
     Plots the full sequence of actions and the resulting integrated trajectory.
-    gt_actions, pred_actions: (N, 3)
     """
     gt_traj = compute_trajectory(gt_actions)
     pred_traj = compute_trajectory(pred_actions)
     
     fig = plt.figure(figsize=(18, 10))
     
-    # Top-down view (XY Plane)
+    # 1. Top-down view (XY Plane)
     ax1 = fig.add_subplot(1, 2, 1)
     ax1.plot(gt_traj[:, 0], gt_traj[:, 1], 'g-', label='Ground Truth', alpha=0.8, linewidth=2)
     ax1.plot(pred_traj[:, 0], pred_traj[:, 1], 'r--', label='Predicted', alpha=0.8, linewidth=2)
-    
-    # Start and end points
-    ax1.scatter(gt_traj[0, 0], gt_traj[0, 1], c='blue', marker='o', s=100, label='Start', zorder=5)
-    ax1.scatter(gt_traj[-1, 0], gt_traj[-1, 1], c='green', marker='X', s=150, label='GT End', zorder=5)
-    ax1.scatter(pred_traj[-1, 0], pred_traj[-1, 1], c='red', marker='X', s=150, label='Pred End', zorder=5)
-    
+    ax1.scatter(gt_traj[0, 0], gt_traj[0, 1], c='blue', marker='o', s=100, label='Start')
     ax1.set_xlabel('X (m)')
     ax1.set_ylabel('Y (m)')
     ax1.set_title('Top-down Trajectory (XY Plane)')
@@ -54,7 +58,7 @@ def plot_full_trajectory(gt_actions, pred_actions, file_name, save_path=None):
     ax1.axis('equal')
     ax1.grid(True)
     
-    #dx, dy, dtheta plots
+    # 2. Action Components (dx, dy, dtheta)
     steps = np.arange(len(gt_actions))
     labels = ['dx (Forward)', 'dy (Lateral)', 'dtheta (Rotation)']
     for i in range(3):
@@ -72,134 +76,95 @@ def plot_full_trajectory(gt_actions, pred_actions, file_name, save_path=None):
     if save_path:
         plt.savefig(save_path)
         plt.close()
-        print(f"Plot saved to {save_path}")
+    else:
+        plt.show()
+
+def plot_actions(gt_action, pred_action, idx, save_path=None):
+    """
+    Visualizes an 8-step action chunk.
+    """
+    gt_traj = compute_trajectory(gt_action)
+    pred_traj = compute_trajectory(pred_action)
+    fig = plt.figure(figsize=(12, 5))
+    
+    ax1 = fig.add_subplot(1, 2, 1)
+    ax1.plot(gt_traj[:, 0], gt_traj[:, 1], 'g-o', label='GT')
+    ax1.plot(pred_traj[:, 0], pred_traj[:, 1], 'r--s', label='Pred')
+    ax1.set_title(f"Sample {idx} - XY")
+    ax1.legend(); ax1.axis('equal'); ax1.grid(True)
+    
+    ax2 = fig.add_subplot(1, 2, 2)
+    ax2.plot(gt_action[:, 2], 'g-o', label='GT dTheta')
+    ax2.plot(pred_action[:, 2], 'r--s', label='Pred dTheta')
+    ax2.set_title("Rotation")
+    ax2.legend(); ax2.grid(True)
+    
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path)
+        plt.close()
     else:
         plt.show()
 
 def evaluate():
     parser = argparse.ArgumentParser(description="Evaluate eGoNavi DDPM Model")
-    parser.add_argument("--checkpoint", type=str, required=True, help="Path to model weights (.pth)")
-    parser.add_argument("--data_dir", type=str, default="../h5_test", help="Directory containing H5 test files")
-    parser.add_argument("--num_samples", type=int, default=5, help="Number of random samples to visualize (if not --full_traj)")
-    parser.add_argument("--full_traj", action="store_true", help="Evaluate and plot the entire first H5 file sequentially")
+    parser.add_argument("--checkpoint", type=str, required=True)
+    parser.add_argument("--data_dir", type=str, default="/media/saitama/Games1/Documents_ubuntu/eGoNavi_bag_test/")
+    parser.add_argument("--num_samples", type=int, default=5)
+    parser.add_argument("--full_traj", action="store_true")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
 
     device = torch.device(args.device)
     
-    # Model Configurations
+    # Model Configuration
     encoder_cfg = {"in_channels": 5, "out_dim": 512}
-    vint_cfg = {"token_dim": 512, "num_tokens": 6, "num_layers": 1, "num_heads": 4, "ff_dim": 2048}
+    vint_cfg = {"token_dim": 512, "num_tokens": 6, "num_layers": 4, "num_heads": 4, "ff_dim": 2048}
     diffusion_cfg = {"context_dim": 512, "action_dim": 3, "traj_len": 8, "hidden_dim": 256}
 
     model = eGoNavi(encoder_cfg, vint_cfg, diffusion_cfg).to(device)
-    
-    print(f"Loading checkpoint from {args.checkpoint}...")
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    if 'model' in checkpoint:
-        model.load_state_dict(checkpoint['model'], strict=False)
-    else:
-        model.load_state_dict(checkpoint, strict=False)
+    model.load_state_dict(checkpoint['model'] if 'model' in checkpoint else checkpoint, strict=False)
     model.eval()
 
-    data_dir = Path(args.data_dir)
-    h5_files = sorted(list(data_dir.glob("*.h5")))
-    if not h5_files:
-        print(f"No H5 files found in {args.data_dir}")
-        return
-
-    # Process the first file
+    h5_files = sorted(list(Path(args.data_dir).glob("*.h5")))
     dataset = EnavippH5Dataset(h5_files[0], load_rgb=False)
     stats = dataset.get_stats()
-    action_mean = stats['action_mean'].to(device)
-    action_std = stats['action_std'].to(device)
+    action_mean_xy = stats['action_mean_xy'].to(device)
+    action_std_xy = stats['action_std_xy'].to(device)
 
     if args.full_traj:
-        # Sequential loading for full trajectory
         loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_enavi)
-        print(f"Processing full trajectory sequentially: {h5_files[0].name}...")
+        gt_list, pred_list = [], []
         
-        gt_list = []
-        pred_list = []
-        
-        step_count = 0
         with torch.no_grad():
             for batch in tqdm(loader):
-                step_count += 1
-                if step_count < 5:
-                    continue # Skip first 5 steps as requested
-
-                voxels = batch["voxel"].to(device)      # Already (1, 5, 5, 72, 128)
-                goal_voxel = batch["goal_voxel"].to(device) # (1, 5, 72, 128)
-                gt_action_norm = batch["action"].to(device)
-
-                # Sample 8-step chunk
+                voxels = batch["voxel"].to(device)
+                goal_voxel = batch["goal_voxel"].to(device)
+                
                 pred_action_norm = model.sample(voxels, goal_voxel, device)
 
-                # Unnormalize and store
-                gt_unnorm = (gt_action_norm * action_std + action_mean).cpu().numpy()[0]
-                pred_unnorm = (pred_action_norm * action_std + action_mean).cpu().numpy()[0]
+                gt_unnorm = denormalize_action(batch["action"].to(device), action_mean_xy, action_std_xy).cpu().numpy()[0]
+                pred_unnorm = denormalize_action(pred_action_norm, action_mean_xy, action_std_xy).cpu().numpy()[0]
 
                 gt_list.append(gt_unnorm[0])
                 pred_list.append(pred_unnorm[0])
-        
 
-        # Visualize the resulting integrated trajectory
         plot_full_trajectory(np.array(gt_list), np.array(pred_list), h5_files[0].name)
     else:
-        # Random sample visualization
         loader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=collate_enavi)
-        print(f"Visualizing {args.num_samples} random samples...")
         with torch.no_grad():
             for i, batch in enumerate(loader):
                 if i >= args.num_samples: break
-                voxel = batch['voxel'].to(device)
-                gt_action_norm = batch['action'].to(device)
-                if voxel.dim() == 4:
-                    voxel = voxel.unsqueeze(1).repeat(1, 5, 1, 1, 1)
-                goal_voxel = voxel[:, -1]
-                pred_action_norm = model.sample(voxel, goal_voxel, device)
-                gt_action = (gt_action_norm * action_std + action_mean).cpu().numpy()[0]
-                pred_action = (pred_action_norm * action_std + action_mean).cpu().numpy()[0]
+                voxels = batch['voxel'].to(device)
+                goal_voxel = batch['goal_voxel'].to(device)
                 
-                from eval import plot_actions # self-import or local helper
+                pred_action_norm = model.sample(voxels, goal_voxel, device)
+                
+                gt_action = denormalize_action(batch['action'].to(device), action_mean_xy, action_std_xy).cpu().numpy()[0]
+                pred_action = denormalize_action(pred_action_norm, action_mean_xy, action_std_xy).cpu().numpy()[0]
+                
                 plot_actions(gt_action, pred_action, i)
-
-def plot_actions(gt_action, pred_action, idx, save_path=None):
-    """
-    Visualizes an 8-step action chunk as a 2D trajectory.
-    """
-    gt_traj = compute_trajectory(gt_action)
-    pred_traj = compute_trajectory(pred_action)
-    
-    fig = plt.figure(figsize=(18, 6))
-    
-    # 2D Plot
-    ax1 = fig.add_subplot(1, 2, 1)
-    ax1.plot(gt_traj[:, 0], gt_traj[:, 1], 'g-o', label='Ground Truth')
-    ax1.plot(pred_traj[:, 0], pred_traj[:, 1], 'r--s', label='Predicted')
-    ax1.set_xlabel('X (m)')
-    ax1.set_ylabel('Y (m)')
-    ax1.set_title('8-Step Chunk Trajectory')
-    ax1.axis('equal')
-    ax1.legend()
-    ax1.grid(True)
-    
-    # Rotation plot
-    ax2 = fig.add_subplot(1, 2, 2)
-    steps = np.arange(8)
-    ax2.plot(steps, gt_action[:, 2], 'g-o', label='GT dTheta')
-    ax2.plot(steps, pred_action[:, 2], 'r--s', label='Pred dTheta')
-    ax2.set_xlabel('Step')
-    ax2.set_ylabel('dTheta (rad)')
-    ax2.set_title('Rotation Change per Step')
-    ax2.legend()
-    ax2.grid(True)
-    
-    plt.suptitle(f"Action Chunk Visualization - Sample {idx}")
-    plt.tight_layout()
-    if save_path: plt.savefig(save_path); plt.close()
-    else: plt.show()
 
 if __name__ == "__main__":
     evaluate()
