@@ -32,17 +32,18 @@ class EnavippH5Dataset(Dataset):
                 print(f"Warning: load_rgb=True but RGB datasets not found in {h5_path}.")
                 self.load_rgb = False
 
-            # Calculate or use provided action normalization stats
+            # Calculate or use provided action normalization stats (Max Scaling)
             if stats is None:
-                all_actions = f['actions'][()] 
-                
-                self.action_mean_xy = torch.from_numpy(all_actions[:, :,0:2].mean(axis=(0, 1)).astype(np.float32))
-                self.action_std_xy = torch.from_numpy(all_actions[:, :,0:2].std(axis=(0, 1)).astype(np.float32))
-
-                self.action_std_xy = torch.clamp(self.action_std_xy, min=1e-6)
+                all_actions = f['actions'][()] # (N, 8, 3)
+                # Max absolute value for XY and Theta for scaling to [-1, 1]
+                self.action_max_xy = torch.from_numpy(np.abs(all_actions[:, :, 0:2]).max(axis=(0, 1)).astype(np.float32))
+                self.action_max_theta = torch.from_numpy(np.abs(all_actions[:, :, 2:3]).max(axis=(0, 1)).astype(np.float32))
+                # Avoid division by zero
+                self.action_max_xy = torch.clamp(self.action_max_xy, min=1e-6)
+                self.action_max_theta = torch.clamp(self.action_max_theta, min=1e-6)
             else:
-                self.action_mean_xy = stats['action_mean_xy']
-                self.action_std_xy = stats['action_std_xy']
+                self.action_max_xy = stats['action_max_xy']
+                self.action_max_theta = stats['action_max_theta']
 
     @property
     def h5f(self):
@@ -64,10 +65,8 @@ class EnavippH5Dataset(Dataset):
 
     def get_stats(self):
         return {
-            'action_mean_xy': self.action_mean_xy,
-            'action_std_xy': self.action_std_xy,
-            'action_mean_theta': self.action_mean_theta,
-            'action_std_theta': self.action_std_theta
+            'action_max_xy': self.action_max_xy,
+            'action_max_theta': self.action_max_theta
         }
 
     def __getitem__(self, idx):
@@ -84,8 +83,7 @@ class EnavippH5Dataset(Dataset):
             history_voxels.append(v)
         voxels = torch.stack(history_voxels, dim=0) # (5, C, 72, 128)
         
-        # 2. Load and Resize Goal (BUG 2 FIX)
-        # Instead of always taking the last frame, take a frame 1-20 steps ahead (subgoal)
+        # 2. Load and Resize Goal
         max_goal_dist = min(20, self.length - 1 - idx)
         if max_goal_dist > 0:
             goal_dist = np.random.randint(1, max_goal_dist + 1)
@@ -96,14 +94,13 @@ class EnavippH5Dataset(Dataset):
         goal_voxel = torch.from_numpy(f['voxels'][goal_idx].astype(np.float32)).unsqueeze(0)
         goal_voxel = F.interpolate(goal_voxel, size=VOXEL_SIZE, mode='area').squeeze(0)
         
-        # 3. Load and normalize action
+        # 3. Load and normalize action (Max Scaling to [-1, 1])
         raw_action = torch.from_numpy(f['actions'][idx].astype(np.float32))
         raw_action_xy = raw_action[:,0:2]
         raw_action_theta = raw_action[:,2:3]
         
-        action_xy = (raw_action_xy - self.action_mean_xy) / self.action_std_xy
-        # BUG 5 Fix: Use Z-score for theta too
-        action_theta = (raw_action_theta - self.action_mean_theta) / self.action_std_theta
+        action_xy = raw_action_xy / self.action_max_xy
+        action_theta = raw_action_theta / self.action_max_theta
         
         action = torch.concat([action_xy, action_theta], dim=-1)
 
